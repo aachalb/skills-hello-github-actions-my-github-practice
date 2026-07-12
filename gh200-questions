@@ -1,0 +1,483 @@
+For the **Microsoft GH-200 (GitHub Actions) certification style**, the hardest questions usually test **workflow evaluation order, contexts, permissions, expressions, reusable workflows, matrices, artifacts, environments, and security**.
+
+I can't provide actual leaked exam questions, but here are **exam-style practice questions** with similar difficulty and concepts.
+
+---
+
+## Question 1 — Job dependency + failure handling (Hard)
+
+What happens?
+
+```yaml
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Building"
+      - run: exit 1
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Testing"
+
+  deploy:
+    needs:
+      - build
+      - test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploying"
+```
+
+### Answer
+
+Output:
+
+```
+Building
+Deploying
+```
+
+Explanation:
+
+* `build` starts.
+* First step succeeds.
+* Second step fails → `build` fails.
+* `test` requires `build` success → skipped.
+* `deploy` has:
+
+```yaml
+if: always()
+```
+
+so it runs even though dependencies failed.
+
+---
+
+# Question 2 — Expression evaluation timing (Very Hard)
+
+What is printed?
+
+```yaml
+env:
+  COLOR: blue
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Change variable
+        run: echo "COLOR=red" >> $GITHUB_ENV
+
+      - name: Print
+        run: |
+          echo "$COLOR"
+          echo "${{ env.COLOR }}"
+```
+
+### Answer
+
+Output:
+
+```
+red
+blue
+```
+
+Why?
+
+First step writes:
+
+```bash
+COLOR=red >> $GITHUB_ENV
+```
+
+This updates the **future shell environment**.
+
+Second step:
+
+```bash
+echo "$COLOR"
+```
+
+gets the updated environment:
+
+```
+red
+```
+
+But:
+
+```yaml
+${{ env.COLOR }}
+```
+
+was evaluated by GitHub Actions using the original workflow environment:
+
+```
+blue
+```
+
+---
+
+# Question 3 — Matrix failure strategy (Very Hard)
+
+How many jobs run?
+
+```yaml
+jobs:
+  test:
+    strategy:
+      fail-fast: true
+      matrix:
+        node: [16,18,20]
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - run: |
+          if [ "${{ matrix.node }}" = "18" ]; then
+            exit 1
+          fi
+
+          echo "Node ${{ matrix.node }}"
+```
+
+### Answer
+
+Possible output:
+
+```
+Node 16
+Node 20
+```
+
+or
+
+```
+Node 16
+```
+
+Explanation:
+
+Matrix creates:
+
+```
+test-node16
+test-node18
+test-node20
+```
+
+Node 18 fails.
+
+Because:
+
+```yaml
+fail-fast: true
+```
+
+GitHub cancels other running matrix jobs.
+
+---
+
+# Question 4 — Secret availability (GH-200 style)
+
+Workflow:
+
+```yaml
+on:
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - run: echo ${{ secrets.API_KEY }}
+```
+
+Will the secret appear?
+
+### Answer
+
+Usually:
+
+```
+No
+```
+
+Reason:
+
+For security reasons:
+
+* `pull_request` from the same repository → secrets available.
+* `pull_request` from a fork → secrets are NOT available.
+
+Fork PRs run with restricted permissions.
+
+---
+
+# Question 5 — Permissions trap
+
+What happens?
+
+```yaml
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          git tag v1
+          git push origin v1
+```
+
+### Answer
+
+Fails.
+
+Reason:
+
+The workflow only has:
+
+```
+contents: read
+```
+
+but pushing tags requires:
+
+```
+contents: write
+```
+
+Correct:
+
+```yaml
+permissions:
+  contents: write
+```
+
+---
+
+# Question 6 — Reusable workflow output (Hard)
+
+Workflow A:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.number }}
+
+    steps:
+      - id: version
+        run: echo "number=1.0" >> $GITHUB_OUTPUT
+```
+
+Workflow B:
+
+```yaml
+needs: build
+
+steps:
+  - run: echo "${{ needs.build.outputs.version }}"
+```
+
+Output?
+
+### Answer:
+
+```
+1.0
+```
+
+Flow:
+
+```
+Step output
+     ↓
+Job output
+     ↓
+needs context
+```
+
+---
+
+# Question 7 — Concurrency cancellation (Very Hard)
+
+```yaml
+concurrency:
+  group: production
+  cancel-in-progress: true
+```
+
+Two commits are pushed quickly:
+
+```
+Commit A starts deployment
+Commit B starts deployment
+```
+
+What happens?
+
+### Answer:
+
+```
+Commit A deployment cancelled
+Commit B deployment continues
+```
+
+Because both belong to:
+
+```
+production
+```
+
+group.
+
+---
+
+# Question 8 — Environment protection rule (GH-200 style)
+
+```yaml
+jobs:
+ deploy:
+   environment:
+     name: production
+```
+
+Production environment requires:
+
+```
+Manual approval
+```
+
+What happens?
+
+### Answer:
+
+The job pauses before running steps.
+
+Flow:
+
+```
+Job starts
+   |
+   ↓
+Environment protection check
+   |
+   ↓
+Waiting for approval
+   |
+   ↓
+Steps execute
+```
+
+---
+
+# Question 9 — `continue-on-error` behavior
+
+What prints?
+
+```yaml
+steps:
+  - name: Test
+    continue-on-error: true
+    run: exit 1
+
+  - name: Next
+    run: echo "Hello"
+```
+
+### Answer:
+
+Output:
+
+```
+Hello
+```
+
+Reason:
+
+`continue-on-error` makes the failed step not fail the job.
+
+---
+
+# Question 10 — The classic GH-200 tricky one
+
+```yaml
+jobs:
+
+ build:
+   runs-on: ubuntu-latest
+   steps:
+     - run: exit 1
+
+ deploy:
+   needs: build
+   if: success()
+   runs-on: ubuntu-latest
+   steps:
+     - run: echo Deploy
+```
+
+Does deploy run?
+
+### Answer:
+
+No.
+
+Reason:
+
+`needs: build`
+
+means:
+
+```
+build must succeed
+```
+
+but:
+
+```
+build ❌ failed
+```
+
+so:
+
+```
+deploy skipped
+```
+
+---
+
+The areas you should master for GH-200 are:
+
+1. `if:` evaluation order
+2. `needs` dependency behavior
+3. `always()`, `success()`, `failure()`, `cancelled()`
+4. `$GITHUB_ENV` vs `${{ env }}` vs `$GITHUB_OUTPUT`
+5. Matrix strategy and `fail-fast`
+6. Workflow permissions
+7. Fork PR security
+8. Reusable workflows
+9. Artifacts and caching
+10. Environments and approvals
+
+These topics are where the most difficult GH-200 questions are usually built.
